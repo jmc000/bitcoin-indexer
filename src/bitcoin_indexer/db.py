@@ -1,62 +1,74 @@
 import os
+import logger
+import context_manager
 
 from dotenv import load_dotenv
 from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from sqlalchemy.exc import IntegrityError
-
-import logger
-import context_manager
 
 logger = logger.setup_logging(__name__)
 Base = declarative_base()
 
-DEFAULT_SQLITE_URL = "sqlite:///var/bitcoin_indexer.db"
+load_dotenv()
+DEFAULT_SQLITE_URL = os.getenv('DB_URL')
 
 # ------------------------------------------------------------
 # DB Tables
 # ------------------------------------------------------------
-# Everything but:
-# - tx (dedicated table transactions.db, link to block hash FK)
-# - nextblockhash (derivable from the next block’s previousblockhash)
-# NOTE: confirmations (can become stale, need to be updated periodically)
-# TODO: define constraints -> eg. nullable=False, String(50), unique=True
-BLOCK_FIELDS = {
-    "hash":               (String,  {"primary_key": True}),
-    "height":             (Integer, {}),
-    "size":               (Integer, {}),
-    "strippedsize":       (Integer, {}),
-    "weight":             (Integer, {}),
-    "version":            (Integer, {}),
-    "versionHex":         (String,  {}),
-    "merkleroot":         (String,  {}),
-    "time":               (Integer, {}),
-    "mediantime":         (Integer, {}),
-    "confirmations":      (Integer, {}),
-    "nonce":              (Integer, {}),
-    "bits":               (String,  {}),
-    "difficulty":         (Float,   {}),
-    "chainwork":          (String,  {}),
-    "nTx":                (Integer, {}),
-    "previousblockhash":  (String,  {}),
+# TODO: target? coinbase_tx?
+BLOCK_FIELDS_TO_EXCLUDE = ["tx", "nextblockhash", "target", "coinbase_tx"]
+TRANSACTION_FIELDS_TO_EXCLUDE = ["vin", "vout"]
+
+
+#TODO: stale field regular sync loop
+STALE_BLOCK_FIELDS = {
+    "confirmations"
 }
 
-TRANSACTION_FIELDS = {
-    "txid":               (String,  { "primary_key": True }),
-    "hash":               (String,  {}),
-    "in_active_chain":    (Boolean, {}),
-    "hex":                (String,  {}),
-    "size":               (Integer, {}),
-    "vsize":              (Integer, {}),
-    "weight":             (Integer, {}),
-    "version":            (Integer, {}),
-    "locktime":           (Integer, {}),
-    "blockhash":          (String,  {"foreign_key": "blocks.hash"}),
-    "confirmations":      (Integer, {}),
-    "blocktime":          (Integer, {}),
-    "time":               (Integer, {}),
+# what about "in_active_chain"?
+STALE_TRANSACTION_FIELDS = {
+    "confirmations"
 }
+
+
+class Blocks(Base):
+    __tablename__ = "blocks"
+    hash = Column(String, primary_key=True, unique=True)
+    height = Column(Integer)
+    size = Column(Integer)
+    strippedsize = Column(Integer)
+    weight = Column(Integer)
+    version = Column(Integer)
+    versionHex = Column(String)
+    merkleroot = Column(String)
+    time = Column(Integer)
+    mediantime = Column(Integer)
+    confirmations = Column(Integer)
+    nonce = Column(Integer)
+    bits = Column(String)
+    difficulty = Column(Float)
+    chainwork = Column(String)
+    nTx = Column(Integer)
+    previousblockhash = Column(String)
+
+
+class Transactions(Base):
+    __tablename__ = "transactions"
+
+    txid = Column(String, primary_key=True, unique=True)
+    hash = Column(String)
+    in_active_chain = Column(Boolean)
+    hex = Column(String)
+    size = Column(Integer)
+    vsize = Column(Integer)
+    weight = Column(Integer)
+    version = Column(Integer)
+    locktime = Column(Integer)
+    fee = Column(Integer)
+    
+    #TODO: to add, outside ["tx"]
+    blockhash = Column(String, ForeignKey("blocks.hash"))
 
 # TX_INPUTS / TX_OUTPUTS
 # --> composite primary key: PRIMARY KEY (txid, input_index/output_index)
@@ -94,28 +106,24 @@ TRANSACTION_FIELDS = {
 #     ...
 #   ],
 
-def _model(name: str, tablename: str, fields: dict):
-    attrs = {"__tablename__": tablename}
-    for col_name, (col_type, kwargs) in fields.items():
-        kwargs = kwargs.copy()
-        fk = kwargs.pop("foreign_key", None)
-        args = (ForeignKey(fk),) if fk else ()
-        attrs[col_name] = Column(col_type, *args, **kwargs)
-    return type(name, (Base,), attrs)
+
+# COINBASE TX (from getblock)
+# TODO: remove witness (always 0)
+# "coinbase_tx": {
+#     "version": 1,
+#     "locktime": 1106486620,
+#     "sequence": 0,
+#     "coinbase": "03aa9b0e2cfabe6d6d0282b99a5255e3a7f4ce5a902045550078aafc056ad84b1e20942c3a1b2f1a9710000000f09f909f092f4632506f6f6c2f640000000000000000000000000000000000000000000000000000000000000000000000050000302800",
+#     "witness": "0000000000000000000000000000000000000000000000000000000000000000"
+#   }
 
 
-Blocks = _model("Blocks", "blocks", BLOCK_FIELDS)
-Transactions = _model("Transactions", "transactions", TRANSACTION_FIELDS)
-
-
-
-# ------------------------------------------------------------
-# Helper functions
-# ------------------------------------------------------------
+# --------------
+# General
+# --------------
 def get_database_url() -> str:
     load_dotenv()
     return os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
-
 
 def create_db_engine(url: str | None = None):
     url = url or get_database_url()
@@ -129,73 +137,64 @@ def create_tables(engine: Engine) -> None:
     #TODO: for later use Alembic instead
     Base.metadata.create_all(engine)
 
-def open_session(engine: Engine) -> sessionmaker:
-    return sessionmaker(bind=engine)
-
-def insert_block(block: Blocks, s: Session):
-    s.add(block)
-    s.commit()
-def insert_blocks(blocks: [Blocks], s: Session):
-    s.add_all(blocks)
-    s.commit()
-def insert_block_from_dict(data: dict, s: Session):
-    """ If input data in a dict format, unpack it dynamically while creating an object """
-    b = Blocks(**data)
-    s.add(b)
-    s.commit()
-def insert_blocks_from_dict(list: list[dict], s: Session):
-    blocks = []
-    for data in list:
-        b = Blocks(**data)
-        blocks.append(b)
-    s.add_all(blocks)
-    s.commit()
-
-@event.listens_for(Blocks, 'before_insert')
-def before_insert_hook(mapper, s: Session, new_block: Blocks):
-    print(f"2. session: {s}")
-    #todo: what about the error rasing management for db.py?
-    try:
-        existing_block = s.get(Blocks, new_block.hash)
-        if existing_block is not None:
-            # TODO: create a central logger
-            # log.error()
-            raise IntegrityError(f"Block {new_block.hash} already exists")
-    except IntegrityError:
-        # TODO: create a central logger
-        # log.error()
-        raise  IntegrityError(f"Block {new_block.hash} already exists")
-
-
-
-# Transactions
-def insert_tx(tx: Transactions, s: sessionmaker):
-    s.add(tx)
-    s.commit()
-def insert_txs(txs: [Transactions], s: sessionmaker):
-    s.add_all(txs)
-    s.commit()
-def insert_tx_from_dict(data: dict, s: sessionmaker):
-    """ If input data in a dict format, unpack it dynamically while creating an object """
-    t = Transactions(**data)
-    s.add(t)
-    s.commit()
-def insert_transactions_from_dict(list: list[dict], s: sessionmaker):
-    txs = []
-    for data in list:
-        t = Transactions(**data)
-        txs.append(t)
-    s.add_all(txs)
-    s.commit()
-
-
-# ------------------------------------------------------------
-# Main
-# ------------------------------------------------------------
-if __name__ == "__main__":
+def set_up_db() -> Engine:
     db_url=get_database_url()
     engine = create_db_engine(db_url)
     create_tables(engine)
+    return engine
 
-    S = sessionmaker(bind=engine)
-    print(type(S))
+# --------------
+# Block
+# --------------
+def insert_blocks(blocks: list[Blocks], s: Session):
+    with context_manager.fail_on_db_error(s):
+        s.add_all(blocks)
+        s.commit()
+
+def insert_blocks_from_dict(block_list: list[dict], s: Session):
+    with context_manager.fail_on_db_error(s):
+        blocks = []
+        for data in block_list:
+            b = Blocks(**data)
+            blocks.append(b)
+        s.add_all(blocks)
+        s.commit()
+
+
+# --------------
+# Transaction
+# --------------
+def insert_txs(txs: list[Transactions], s: sessionmaker):
+    with context_manager.fail_on_db_error(s):
+        s.add_all(txs)
+        s.commit()
+
+def insert_transactions_from_dict(tx_list: list[dict], s: sessionmaker, block_hash : String = None):
+    with context_manager.fail_on_db_error(s):
+        txs = []
+        for data in tx_list:
+            if block_hash is not None:
+                data={**data, 'blockhash': block_hash}
+            t = Transactions(**data)
+            txs.append(t)
+        s.add_all(txs)
+        s.commit()
+
+# --------------
+# Block + txs
+# --------------
+def insert_block_with_txs(block: dict, engine: Engine):
+    txs = block['tx']
+    block_hash = block["hash"]
+    print(f"block hash: {block_hash}")
+
+    for field in BLOCK_FIELDS_TO_EXCLUDE:
+        del block[field]
+    for tx in txs:
+        for field in TRANSACTION_FIELDS_TO_EXCLUDE:
+            del tx[field]
+    
+    with Session(engine) as s:
+        #TODO: this method should still take a list of dict?
+        insert_blocks_from_dict([block],s)
+        insert_transactions_from_dict(txs, s, block_hash)
