@@ -186,14 +186,11 @@ def insert_transactions_from_dict(tx_list: list[dict], s: sessionmaker, block_ha
 def insert_block_with_txs(block: dict, engine: Engine):
     txs = block['tx']
     block_hash = block["hash"]
-    print(f"block hash: {block_hash}")
-
     for field in BLOCK_FIELDS_TO_EXCLUDE:
         del block[field]
     for tx in txs:
         for field in TRANSACTION_FIELDS_TO_EXCLUDE:
             del tx[field]
-    
     with Session(engine) as s:
         #TODO: this method should still take a list of dict?
         insert_blocks_from_dict([block],s)
