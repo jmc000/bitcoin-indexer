@@ -1,7 +1,6 @@
 import logger
 import rpc as rpc
 import db as db
-import json
 
 from sqlalchemy.orm import Session
 
@@ -12,8 +11,7 @@ def insert_block_with_txs(block_number: int, engine: Engine):
     block = rpc.Blocks()
     block_hash = block.get_block_hash(block_number)
     b = block.get_block(block_hash, verbosity=2)
-    db.insert_block_with_txs(b, engine)
-
+    db.insert_all(b, engine)
 
 if __name__ == "__main__":
     # -----------
@@ -22,3 +20,4 @@ if __name__ == "__main__":
     block_number = 957354
     engine = db.set_up_db()
     insert_block_with_txs(block_number, engine)
+

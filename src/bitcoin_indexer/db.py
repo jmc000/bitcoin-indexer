@@ -19,7 +19,7 @@ DEFAULT_SQLITE_URL = os.getenv('DB_URL')
 # TODO: target? coinbase_tx?
 BLOCK_FIELDS_TO_EXCLUDE = ["tx", "nextblockhash", "target", "coinbase_tx"]
 TRANSACTION_FIELDS_TO_EXCLUDE = ["vin", "vout"]
-
+COINBASETX_FIELDS_TO_EXCLUDE = ["witness"]
 
 #TODO: stale field regular sync loop
 STALE_BLOCK_FIELDS = {
@@ -34,7 +34,7 @@ STALE_TRANSACTION_FIELDS = {
 
 class Blocks(Base):
     __tablename__ = "blocks"
-    hash = Column(String, primary_key=True, unique=True)
+    hash = Column(String, primary_key=True)
     height = Column(Integer)
     size = Column(Integer)
     strippedsize = Column(Integer)
@@ -56,7 +56,7 @@ class Blocks(Base):
 class Transactions(Base):
     __tablename__ = "transactions"
 
-    txid = Column(String, primary_key=True, unique=True)
+    txid = Column(String, primary_key=True)
     hash = Column(String)
     in_active_chain = Column(Boolean)
     hex = Column(String)
@@ -106,20 +106,17 @@ class Transactions(Base):
 #     ...
 #   ],
 
+class CoinbaseTx(Base):
+    __tablename__ = "coinbasetx"
 
-# COINBASE TX (from getblock)
-# TODO: remove witness (always 0)
-# "coinbase_tx": {
-#     "version": 1,
-#     "locktime": 1106486620,
-#     "sequence": 0,
-#     "coinbase": "03aa9b0e2cfabe6d6d0282b99a5255e3a7f4ce5a902045550078aafc056ad84b1e20942c3a1b2f1a9710000000f09f909f092f4632506f6f6c2f640000000000000000000000000000000000000000000000000000000000000000000000050000302800",
-#     "witness": "0000000000000000000000000000000000000000000000000000000000000000"
-#   }
-
+    blockhash = Column(String, ForeignKey("blocks.hash"), primary_key=True)
+    version = Column(Integer)
+    locktime = Column(Integer)
+    sequence = Column(Integer)
+    coinbase = Column(String)
 
 # --------------
-# General
+# DB Set Up
 # --------------
 def get_database_url() -> str:
     load_dotenv()
@@ -131,7 +128,7 @@ def create_db_engine(url: str | None = None):
         url = url or get_database_url()
         connect_args = {}
         if url.startswith("sqlite"):
-            # Required when the engine is shared across threads?
+            #TODO: Required when the engine is shared across threads?
             connect_args["check_same_thread"] = False
         logger.info("Database Engine created.")
         return create_engine(url, echo=False, hide_parameters=True, connect_args=connect_args)
@@ -150,64 +147,40 @@ def set_up_db() -> Engine:
     create_tables(engine)
     return engine
 
-# --------------
-# Block
-# --------------
-def insert_blocks(blocks: list[Blocks], s: Session):
-    with context_manager.fail_on_db_insert_error(s):
-        s.add_all(blocks)
-        s.commit()
 
-#TODO: this method should still take a list of dict?
-def insert_blocks_from_dict(block_list: list[dict], s: Session):
+# --------------
+# Insertion
+# --------------
+def insert_from_dict(list_dict: list[dict], table_class: type[Base], s: Session):
     with context_manager.fail_on_db_insert_error(s):
-        logger.info(f"Inserting {len(block_list)} representations of the resource Blocks...")
-        blocks = []
-        for data in block_list:
-            b = Blocks(**data)
-            blocks.append(b)
-            logger.debug(f"Block height: {b.height}")
-        s.add_all(blocks)
+        if not issubclass(table_class, Base):
+            raise TypeError("table_class arg must be a subclass of Base.")
+        logger.info(f"Inserting {len(list_dict)} representations of the resource {table_class.__name__}...")
+        pk_name = inspect(table_class).primary_key[0].name
+        objects = []
+        for data in list_dict:
+            model = table_class(**data)
+            objects.append(model)
+            logger.debug(f"Inserting a representation of {table_class.__name__} with PK {pk_name}={getattr(model, pk_name)}")
+        s.add_all(objects)
         s.commit()
         logger.info(f"Insertion done.")
 
-
-# --------------
-# Transaction
-# --------------
-def insert_txs(txs: list[Transactions], s: sessionmaker):
-    with context_manager.fail_on_db_insert_error(s):
-        s.add_all(txs)
-        s.commit()
-
-def insert_transactions_from_dict(tx_list: list[dict], s: sessionmaker, block_hash : String = None):
-    with context_manager.fail_on_db_insert_error(s):
-        logger.info(f"Inserting {len(tx_list)} representations of the resource Transactions...")
-        txs = []
-        for data in tx_list:
-            if block_hash is not None:
-                data={**data, 'blockhash': block_hash}
-            t = Transactions(**data)
-            txs.append(t)
-            logger.debug(f"Transaction ID: {t.txid}")
-        s.add_all(txs)
-        s.commit()
-        logger.info(f"Insertion done.")
-
-# --------------
-# Block + txs
-# --------------
-def insert_block_with_txs(block: dict, engine: Engine):
+def insert_all(block: dict, engine: Engine):
     logger.info(f"Adding Block height: {block["height"]} and all it's transactions...")
     txs = block['tx']
     block_hash = block["hash"]
+    cb = block['coinbase_tx']
+    cb={**cb, 'blockhash': block_hash}
     for field in BLOCK_FIELDS_TO_EXCLUDE:
         del block[field]
     for tx in txs:
         for field in TRANSACTION_FIELDS_TO_EXCLUDE:
             del tx[field]
+    for field in COINBASETX_FIELDS_TO_EXCLUDE:
+        del cb[field]
     with Session(engine) as s:
-        insert_blocks_from_dict([block],s)    
-        insert_transactions_from_dict(txs, s, block_hash)
+        insert_from_dict([block], Blocks, s)
+        insert_from_dict(txs, Transactions, s)
+        insert_from_dict([cb], CoinbaseTx, s)
         logger.info(f"Finished processing block {block['height']}.")
-        
