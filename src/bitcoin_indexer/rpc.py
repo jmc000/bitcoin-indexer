@@ -27,6 +27,7 @@ class GetBlockClient:
             "jsonrpc": "2.0",
             "id": "getblock.io"
         }
+        self._rpc_domain = "go.getblock.io"
         self._rpc_url = None
         self._retries = Retry(total=5, backoff_factor=1)
         self._session = self._create_session()
@@ -39,7 +40,7 @@ class GetBlockClient:
             token = os.getenv('GETBLOCK_ACCESS_TOKEN')
             if not token:
                 raise RuntimeError("Could not retrieve GetBlock Access Token — check .env file")
-            self._rpc_url = f"https://go.getblock.io/{token}"
+            self._rpc_url = f"https://{self._rpc_domain}/{token}"
         return self._rpc_url
 
     def _create_session(self) -> requests.Session:
@@ -53,13 +54,14 @@ class GetBlockClient:
         if cache_file.exists():
             logger.info(f"Cache hit:  {method}  with params: {params}")
             return json.loads(cache_file.read_text())
-
+        else:
+            url = self.rpc_url
         logger.info(f"Calling RPC:  {verb}  {method}  with params: {params}")
         with context_manager.fail_on_error():
             payload = json.dumps({**self._payload, 'method': method, 'params': params})
             response = self._session.request(
                 verb,
-                self.rpc_url,
+                url,
                 headers=self._headers,
                 data=payload
             )

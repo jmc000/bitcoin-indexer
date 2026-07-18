@@ -10,7 +10,7 @@ logger = logger.setup_logging(__name__)
 def fail_on_error():
     try:
         yield
-    except (exceptions.RequestException, OSError, RuntimeError, AttributeError) as e:
+    except (exceptions.RequestException, AttributeError) as e:
         logger.error(f"{e}")
 
 @contextmanager
