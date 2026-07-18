@@ -2,3 +2,4 @@
 roadmap.md
 var/
 src/bitcoin_indexer/__pycache__/
+.vscode/

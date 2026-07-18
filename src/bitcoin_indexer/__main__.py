@@ -2,7 +2,7 @@ import logger
 import rpc as rpc
 import db as db
 
-from sqlalchemy.orm import Session
+from sqlalchemy.engine import Engine
 
 logger = logger.setup_logging(__name__)
 

@@ -1,11 +1,12 @@
 import os
+from typing import Any
 import logger
 import context_manager
 
 from dotenv import load_dotenv
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, create_engine, event, inspect
+from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Integer, String, create_engine, inspect
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import declarative_base, Session
 
 logger = logger.setup_logging(__name__)
 Base = declarative_base()
@@ -16,7 +17,6 @@ DEFAULT_SQLITE_URL = os.getenv('DB_URL')
 # ------------------------------------------------------------
 # DB Tables
 # ------------------------------------------------------------
-# TODO: target? coinbase_tx?
 BLOCK_FIELDS_TO_EXCLUDE = ["tx", "nextblockhash", "target", "coinbase_tx"]
 TRANSACTION_FIELDS_TO_EXCLUDE = ["vin", "vout"]
 COINBASETX_FIELDS_TO_EXCLUDE = ["witness"]
@@ -52,11 +52,10 @@ class Blocks(Base):
     nTx = Column(Integer)
     previousblockhash = Column(String)
 
-
 class Transactions(Base):
     __tablename__ = "transactions"
-
     txid = Column(String, primary_key=True)
+    n = Column(Integer)
     hash = Column(String)
     in_active_chain = Column(Boolean)
     hex = Column(String)
@@ -66,50 +65,29 @@ class Transactions(Base):
     version = Column(Integer)
     locktime = Column(Integer)
     fee = Column(Integer)
-    
-    #TODO: to add, outside ["tx"]
     blockhash = Column(String, ForeignKey("blocks.hash"))
 
-# TX_INPUTS / TX_OUTPUTS
-# --> composite primary key: PRIMARY KEY (txid, input_index/output_index)
-#   "vin" : [                          (json array)
-#     {                                (json object)
-#       "txid" : "hex",                (string) The transaction id
-#       "vout" : n,                    (numeric) The output number
-#       "scriptSig" : {                (json object) The script
-#         "asm" : "str",               (string) asm
-#         "hex" : "hex"                (string) hex
-#       },
-#       "sequence" : n,                (numeric) The script sequence number
-#       "txinwitness" : [              (json array)
-#         "hex",                       (string) hex-encoded witness data (if any)
-#         ...
-#       ]
-#     },
-#     ...
-#   ],
-#   "vout" : [                         (json array)
-#     {                                (json object)
-#       "value" : n,                   (numeric) The value in BTC
-#       "n" : n,                       (numeric) index
-#       "scriptPubKey" : {             (json object)
-#         "asm" : "str",               (string) the asm
-#         "hex" : "str",               (string) the hex
-#         "reqSigs" : n,               (numeric) The required sigs
-#         "type" : "str",              (string) The type, eg 'pubkeyhash'
-#         "addresses" : [              (json array)
-#           "str",                     (string) bitcoin address
-#           ...
-#         ]
-#       }
-#     },
-#     ...
-#   ],
+class Inputs(Base):
+    __tablename__ = "inputs"
+    spending_txid = Column(String, ForeignKey("transactions.txid"), primary_key=True)
+    n = Column(Integer, primary_key=True)
+    txid = Column(String)
+    vout = Column(Integer)
+    scriptSig = Column(JSON)
+    sequence = Column(Integer)
+    txinwitness = Column(JSON)
 
-class CoinbaseTx(Base):
-    __tablename__ = "coinbasetx"
+class Outputs(Base):
+    __tablename__ = "outputs"
+    spending_txid = Column(String, ForeignKey("transactions.txid"), primary_key=True)
+    n = Column(Integer, primary_key=True)
+    value = Column(Integer)
+    scriptPubKey = Column(JSON)
 
+class CoinbaseInputs(Base):
+    __tablename__ = "coinbaseinputs"
     blockhash = Column(String, ForeignKey("blocks.hash"), primary_key=True)
+    spending_txid = Column(String, ForeignKey("transactions.txid"))
     version = Column(Integer)
     locktime = Column(Integer)
     sequence = Column(Integer)
@@ -166,21 +144,59 @@ def insert_from_dict(list_dict: list[dict], table_class: type[Base], s: Session)
         s.commit()
         logger.info(f"Insertion done.")
 
+def _prepare_block_data(block: dict) -> list[dict, dict, list,list, list]:
+    with context_manager.fail_on_error():
+        txs = block['tx']
+        block_hash = block["hash"]
+        cb = block['coinbase_tx']
+
+        inputs = []
+        outputs = []
+        coinbase_spending_txid = None
+        
+        for k, tx in enumerate(txs):
+            #1. Transactions 
+            txid = tx["txid"]
+            txs[k] = {**tx, 'blockhash': block_hash, 'n': k}
+
+            #1. Inputs
+            for n, i in enumerate[Any](txs[k]["vin"]):
+                i["spending_txid"] = txid
+                i["n"] = n
+
+                #2. Coinbase
+                if k == 0 and n == 0 and "coinbase" in i:
+                    coinbase_spending_txid = txid
+                    cb = {**cb, 'blockhash': block_hash, 'spending_txid': coinbase_spending_txid}
+                    break # first input of first block's tx is COINBASE not INPUTS
+
+                inputs.append(i)
+            
+            #3. Outputs
+            for o in txs[k]["vout"]:
+                o["spending_txid"] = txid
+                outputs.append(o)
+
+            #4. Transactions clean up 
+            for field in TRANSACTION_FIELDS_TO_EXCLUDE:
+                del txs[k][field]
+        
+        #5. Blocks & CoinbaseInputs clean up
+        for field in BLOCK_FIELDS_TO_EXCLUDE:
+            del block[field]
+        for field in COINBASETX_FIELDS_TO_EXCLUDE:
+            del cb[field]
+
+        return block, cb, txs, inputs, outputs
+
+
 def insert_all(block: dict, engine: Engine):
-    logger.info(f"Adding Block height: {block["height"]} and all it's transactions...")
-    txs = block['tx']
-    block_hash = block["hash"]
-    cb = block['coinbase_tx']
-    cb={**cb, 'blockhash': block_hash}
-    for field in BLOCK_FIELDS_TO_EXCLUDE:
-        del block[field]
-    for tx in txs:
-        for field in TRANSACTION_FIELDS_TO_EXCLUDE:
-            del tx[field]
-    for field in COINBASETX_FIELDS_TO_EXCLUDE:
-        del cb[field]
+    block_info, coinbase, txs, inputs, outputs = _prepare_block_data(block)
+    logger.info(f"Adding Blocks height: {block["height"]} and all it's transactions...")    
     with Session(engine) as s:
-        insert_from_dict([block], Blocks, s)
+        insert_from_dict([block_info], Blocks, s)
+        insert_from_dict([coinbase], CoinbaseInputs, s)
         insert_from_dict(txs, Transactions, s)
-        insert_from_dict([cb], CoinbaseTx, s)
+        insert_from_dict(inputs, Inputs, s)
+        insert_from_dict(outputs, Outputs, s)
         logger.info(f"Finished processing block {block['height']}.")
