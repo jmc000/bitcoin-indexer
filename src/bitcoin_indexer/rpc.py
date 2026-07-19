@@ -76,31 +76,12 @@ class GetBlockClient:
 
 # ------------------------------------------------------------
 class Blocks(GetBlockClient):
-
     def get_block_hash(self, block_height: int):
         return self.call_rpc("POST", "getblockhash",[block_height])
     
     def get_block(self, hash: str, verbosity: int = 1):
         return self.call_rpc("POST", "getblock",[hash, verbosity])
 
-class Transactions(GetBlockClient):
-    def get_transaction(self, txid: str, verbose: bool = True):
-        return self.call_rpc("POST", "getrawtransaction",[txid, verbose])
-
-class BlockChainInfo(GetBlockClient):
-    
+class NetworkInfo(GetBlockClient):
     def get_blockchaininfo(self):
         return self.call_rpc("POST", "getblockchaininfo", [])   
-    
-    def get_current_difficulty(self):
-        return self.get_blockchaininfo()['result']['difficulty']
-    
-    def get_last_block_height(self):
-        return self.get_blockchaininfo()['result']['blocks']
-    
-    def get_last_header(self):
-        return self.get_blockchaininfo()['result']['headers']
-    
-    def get_last_block_time(self):
-        return self.get_blockchaininfo()['result']['time']
-
