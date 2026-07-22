@@ -29,7 +29,12 @@ class GetBlockClient:
         }
         self._rpc_domain = "go.getblock.io"
         self._rpc_url = None
-        self._retries = Retry(total=5, backoff_factor=1)
+        self._retries = Retry(
+            total=5, 
+            backoff_factor=1,
+            status_forcelist=[500, 502, 503, 504, 505],
+            allowed_methods=frozenset(["POST"]) #API is RPC not REST
+        )
         self._session = self._create_session()
 
 
@@ -57,6 +62,7 @@ class GetBlockClient:
         else:
             url = self.rpc_url
         logger.info(f"Calling RPC:  {verb}  {method}  with params: {params}")
+
         with context_manager.fail_on_error():
             payload = json.dumps({**self._payload, 'method': method, 'params': params})
             response = self._session.request(
@@ -75,7 +81,7 @@ class GetBlockClient:
             return result
 
 # ------------------------------------------------------------
-class Blocks(GetBlockClient):
+class Blocks(GetBlockClient): 
     def get_block_hash(self, block_height: int):
         return self.call_rpc("POST", "getblockhash",[block_height])
     
