@@ -1,10 +1,9 @@
-import logger
-import rpc as rpc
-import db as db
-
-#todo
 import cProfile
 import pstats
+
+import logger
+import rpc
+import db
 
 from sqlalchemy.engine import Engine
 
@@ -22,10 +21,10 @@ if __name__ == "__main__":
     #  MVP
     # -----------
     with cProfile.Profile() as profile:
-        block_number = 957361
-        engine = db.set_up_db()
-        insert_block_with_txs(block_number, engine)
-    
+        BLOCK_NUMBER = 957390
+        e = db.set_up_db()
+        insert_block_with_txs(BLOCK_NUMBER, e)
+
     results = pstats.Stats(profile)
     results.sort_stats(pstats.SortKey.TIME)
     results.dump_stats("./var/results.prof")

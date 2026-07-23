@@ -21,7 +21,6 @@ BLOCK_FIELDS_TO_EXCLUDE = ["tx", "nextblockhash", "target", "coinbase_tx"]
 TRANSACTION_FIELDS_TO_EXCLUDE = ["vin", "vout"]
 COINBASETX_FIELDS_TO_EXCLUDE = ["witness"]
 
-#TODO: stale field regular sync loop
 STALE_BLOCK_FIELDS = {
     "confirmations"
 }
@@ -102,7 +101,7 @@ def get_database_url() -> str:
 
 def create_db_engine(url: str | None = None):
     with context_manager.fail_on_error():
-        logger.info(f"Creating Database Engine at {url}")
+        logger.info("Creating Database Engine at %s", url)
         url = url or get_database_url()
         connect_args = {}
         if url.startswith("sqlite"):
@@ -114,10 +113,10 @@ def create_db_engine(url: str | None = None):
 def create_tables(engine: Engine) -> None:
     #TODO: for later use Alembic instead
     with context_manager.fail_on_error():
-        logger.info(f"Creating Tables...")
+        logger.info("Creating Tables...")
         Base.metadata.create_all(engine)
         table_names = inspect(engine).get_table_names()
-        logger.info(f"Tables created: {table_names}")
+        logger.info("Tables created: %s", table_names)
 
 def set_up_db() -> Engine:
     db_url=get_database_url()
@@ -133,16 +132,16 @@ def insert_from_dict(list_dict: list[dict], table_class: type[Base], s: Session)
     with context_manager.fail_on_db_insert_error(s):
         if not issubclass(table_class, Base):
             raise TypeError("table_class arg must be a subclass of Base.")
-        logger.info(f"Inserting {len(list_dict)} representations of the resource {table_class.__name__}...")
+        logger.info("Inserting %s representations of the resource %s...", len(list_dict), table_class.__name__)
         pk_name = inspect(table_class).primary_key[0].name
         objects = []
         for data in list_dict:
             model = table_class(**data)
             objects.append(model)
-            logger.debug(f"Inserting a representation of {table_class.__name__} with PK {pk_name}={getattr(model, pk_name)}")
+            logger.debug("Inserting a representation of %s with PK %s={getattr(model, pk_name)}", table_class.__name__, pk_name)
         s.add_all(objects)
         s.commit()
-        logger.info(f"Insertion done.")
+        logger.info("Insertion done.")
 
 def _prepare_block_data(block: dict) -> list[dict, dict, list,list, list]:
     with context_manager.fail_on_error():
@@ -153,9 +152,9 @@ def _prepare_block_data(block: dict) -> list[dict, dict, list,list, list]:
         inputs = []
         outputs = []
         coinbase_spending_txid = None
-        
+
         for k, tx in enumerate(txs):
-            #1. Transactions 
+            #1. Transactions
             txid = tx["txid"]
             txs[k] = {**tx, 'blockhash': block_hash, 'n': k}
 
@@ -171,16 +170,16 @@ def _prepare_block_data(block: dict) -> list[dict, dict, list,list, list]:
                     break # first input of first block's tx is COINBASE not INPUTS
 
                 inputs.append(i)
-            
+
             #3. Outputs
             for o in txs[k]["vout"]:
                 o["spending_txid"] = txid
                 outputs.append(o)
 
-            #4. Transactions clean up 
+            #4. Transactions clean up
             for field in TRANSACTION_FIELDS_TO_EXCLUDE:
                 del txs[k][field]
-        
+
         #5. Blocks & CoinbaseInputs clean up
         for field in BLOCK_FIELDS_TO_EXCLUDE:
             del block[field]
@@ -192,11 +191,11 @@ def _prepare_block_data(block: dict) -> list[dict, dict, list,list, list]:
 
 def insert_all(block: dict, engine: Engine):
     block_info, coinbase, txs, inputs, outputs = _prepare_block_data(block)
-    logger.info(f"Adding Blocks height: {block["height"]} and all it's transactions...")    
+    logger.info("Adding Blocks height: %s and all it's transactions...", block["height"])
     with Session(engine) as s:
         insert_from_dict([block_info], Blocks, s)
         insert_from_dict([coinbase], CoinbaseInputs, s)
         insert_from_dict(txs, Transactions, s)
         insert_from_dict(inputs, Inputs, s)
         insert_from_dict(outputs, Outputs, s)
-        logger.info(f"Finished processing block {block['height']}.")
+        logger.info("Finished processing block %s.", block["height"])

@@ -1,0 +1,13 @@
+[MASTER]
+init-hook='import sys; sys.path.insert(0, "src/bitcoin_indexer")'
+
+[FORMAT]
+max-line-length=150
+
+[MESSAGES CONTROL]
+disable=
+    fixme,
+    too-few-public-methods,
+    missing-class-docstring,
+    missing-module-docstring,
+    missing-function-docstring,

@@ -11,9 +11,9 @@ def fail_on_error():
     try:
         yield
     except exceptions.HTTPError as e:
-            logger.error(f"HTTPError {e.response.status_code}: {e.response.reason} - {e.response.text}")
+        logger.error("HTTPError %s: %s - %s", e.response.status_code, e.response.reason, e.response.text)
     except (exceptions.RequestException, AttributeError) as e:
-        logger.error(f"{e}")
+        logger.error(e)
 
 @contextmanager
 def fail_on_db_insert_error(session):
@@ -22,4 +22,3 @@ def fail_on_db_insert_error(session):
     except IntegrityError as e:
         session.rollback()
         logger.error({e})
-
