@@ -19,19 +19,17 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
-
-      - name: Get Python version
-        id: python-version
-        run: echo "version=$(cat .python-version)" >> $GITHUB_OUTPUT
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: ${{ steps.python-version.outputs.version }}
-
-      - name: Install pylint
-        run: |
-          pip install -r requirements-dev.txt
+      - uses: ./.github/workflows/setup-python-env
 
       - name: Run pylint
         run: pylint src/bitcoin_indexer
+  
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup-python-env
+
+      - name: Run pytest
+        run: pytest tests/** -m "not integration"
