@@ -71,8 +71,10 @@ class GetBlockClient:
                 headers=self._headers,
                 data=payload
             )
-            response.raise_for_status()
-            if response.status_code == 200:
+            if response.status_code != 200:
+                raise HTTPError(response=response)
+                return
+            else:
                 logger.info("Request succeded.")
             result = response.json()['result']
 

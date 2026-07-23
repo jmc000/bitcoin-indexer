@@ -1,5 +1,4 @@
 .env
-roadmap.md
 var/
 src/bitcoin_indexer/__pycache__/
 tests/__pycache__/
